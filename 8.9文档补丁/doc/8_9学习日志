@@ -1,0 +1,219 @@
+# 8_9学习日志
+--- 
+# CALLBACK
+## 扩展LED函数
+### 需求分析
+| 操作对象 | 传参 | 功能拆解 | 
+|:---:|:---:|:---:|
+|特定一盏灯|led_num|传参不越界+一次闪烁（亮停灭）|
+### C语法
+#### 宏定义
+```
+#define LED_COUNT 4U
+```
+妙：无符号函数 4u恰好可以限制循环
+#### 宏函数
+```
+#define LEDNUM_IS_VALID(led_num)(led_num<LED_COUNT)
+```
+#### inline函数
+```
+static inline bool led_num_is_valid(led_num)
+{
+    return led_num<LED_COUNT;
+}
+```
+---
+## 实现流水灯
+#### 需求分析
+| 操作对象 | 传参 | 功能拆解 | 
+|:---:|:---:|:---:|
+|4盏灯|无需|循环|
+注意：数据i类型依旧uint8_t之类
+---
+## 封装流水灯
+### 需求分析
+| 操作对象 | 传参 | 功能拆解 | 
+|:---:|:---:|:---:|
+|4盏灯|无需|封装|
+### 封装
+1. .h中的结构体定义，宏定义以及路径包含搬到.c
+> 问题：
+第一，外部代码可能依赖这些内部细节。以后你想改引脚、改编号方式，就容易影响很多地方。
+第二，名字可能冲突。比如别的模块也定义了 LED_COUNT，就可能重复。
+
+> 所以封装的核心思想是：
+外部只知道“能做什么”
+内部隐藏“怎么做到的”
+2. 函数嵌套，以功能为导向
+- flow
+    - blink
+        - on
+        - delay
+        - off
+3. 添加static，限制引用
+### C语法
+#### const-->仅查看
+```
+static const uint16_t led_pin_table[LED_COUNT] =
+{
+    LED1_PIN,
+    LED2_PIN,
+    LED3_PIN,
+    LED4_PIN
+};
+```
+#### 数组
+```
+typedef struct
+{
+    uint8_t led_num;
+    uint32_t on_ms;
+    uint32_t off_ms;
+} LED_BlinkParam;
+
+static void blink(const LED_BlinkParam *param)
+
+ blink(&flow[i])
+```
+##### 结构体常与数组或者指针一起使用
+---
+## 遥控流水灯状态机
+| 操作对象 | 传参 | 功能拆解 | 
+|:---:|:---:|:---:|
+|4盏灯|无需|建立状态机|
+### 建立状态机
+#### 列举状态 
+##### enum
+```
+typedef enum
+{
+    uint8_t led_blink_single=0;
+    uint16_t led_blink_pair;
+    uint16_t led_blink_all;
+}mode;
+```
+#### 准确描述每一个状态 
+> 此处用到的是将三种状态分别用函数表示，1个闪一次，4个一循环；2个一起闪，4个一循环；4个一起闪（直接就是一循环）。
+#### 打包选择
+> flow 根据数字选mode，根据mode执行对应一个循环函数
+ 
+
+# 计时器
+这段代码本质上是一个：
+
+> “信号决定灯效模式，状态机推进亮灭步骤，软件计时器负责非阻塞等待，GPIO函数负责真正控制LED”的程序。
+
+最容易混淆的是：代码里同时存在三种“状态”。
+
+| 状态   | 对应变量            | 回答的问题                  |
+| ---- | --------------- | ---------------------- |
+| 外部信号 | `signal`        | 现在要求播放哪种灯效？            |
+| 灯效模式 | `current_mode`  | 当前正在播放哪种模式？            |
+| 播放阶段 | `current_phase` | 当前步骤进行到点亮、等待亮灯，还是等待灭灯？ |
+| 步骤编号 | `current_step`  | 当前正在处理第几颗或第几组LED？      |
+
+---
+
+# 一、整段代码的总体框架
+
+```mermaid
+flowchart TD
+    A["main中的 while(1)"] --> B["led_flow() 总调度入口"]
+    B --> C["get_signal() 读取信号"]
+    C --> D{"模式是否改变？"}
+    D -- 是 --> E["led_reset_player() 重置播放进度"]
+    D -- 否 --> F{"当前是否为 IDLE？"}
+    E --> F
+    F -- 是 --> G["led_all_off() 全部熄灭并返回"]
+    F -- 否 --> H["timer_get_tick() 读取当前时间"]
+    H --> I["led_update_player(now)"]
+    I --> J["根据 current_phase 推进一步"]
+    J --> K["led_step_on/off() 选择当前LED组"]
+    K --> L["led_on/off() 操作GPIO"]
+```
+
+从模块职责看，可以拆成五层：
+
+```mermaid
+flowchart TD
+    A["输入层<br/>signal、get_signal"] --> B["模式控制层<br/>LED_Mode、current_mode"]
+    B --> C["播放状态机<br/>current_step、current_phase"]
+    C --> D["软件计时器<br/>LED_Timer、timer系列函数"]
+    C --> E["灯效组合层<br/>step_on、step_off、step_count"]
+    E --> F["GPIO驱动层<br/>led_on、led_off、led_all_off"]
+```
+
+# 最终应形成的调用关系
+
+```mermaid
+flowchart TD
+    A["led_flow()"] --> B["get_signal()"]
+    A --> C["led_reset_player()"]
+    A --> D["timer_get_tick()"]
+    A --> E["led_update_player()"]
+
+    E --> F["led_step_count()"]
+    E --> G["timer_start() / timer_is_expired()"]
+    E --> H["led_step_on() / led_step_off()"]
+
+    H --> I["led_on() / led_off() / led_all_off()"]
+    I --> J["HAL_GPIO_WritePin()"]
+    D --> K["HAL_GetTick()"]
+```
+
+把每一层压缩成一句话：
+
+```text
+led_flow()
+负责：读信号、切模式、调用播放器。
+
+led_update_player()
+负责：根据阶段推进一次亮灭过程。
+
+LED_Mode
+负责：决定播放哪种灯效。
+
+LED_Phase
+负责：记录当前步骤进行到哪里。
+
+current_step
+负责：记录当前轮到哪颗或哪组LED。
+
+LED_Timer
+负责：记录从什么时候开始、需要等待多久。
+
+led_step_on/off()
+负责：把模式和步骤转换成具体LED编号。
+
+led_on/off()
+负责：把LED编号转换成GPIO引脚并控制电平。
+```
+
+一条执行链：
+
+```text
+signal
+→ current_mode
+→ current_step + current_phase
+→ led_step_on/off
+→ led_on/off
+→ HAL_GPIO_WritePin
+```
+
+而计时器从旁控制状态机什么时候可以进入下一阶段：
+
+```text
+START_ON
+→ 启动计时器
+→ WAIT_ON
+→ 到期后灭灯
+→ WAIT_OFF
+→ 到期后切换步骤
+→ START_ON
+```
+:cry::cry::cry::smile:
+
+
+
+
