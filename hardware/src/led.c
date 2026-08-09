@@ -58,3 +58,15 @@ void led_off(uint8_t led_num)
             break;
     }
 }
+
+void led_flow(void)
+{
+    uint8_t i;
+
+    for (i = LED1_ID; i <= LED4_ID; i++)
+    {
+        led_on(i);
+        HAL_Delay(250U);
+        led_off(i);
+    }
+}
